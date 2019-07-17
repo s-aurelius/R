@@ -1,9 +1,8 @@
 ---
-title: "Spatial Regression of Stormwater Pollutants"
-author: "Christian Nilsen"
-output:
-  html_document:
-    s8data_print: paged
+title: "DissolvedNitriteNitrate"
+output: html_document
+---
+
 ---
 #To do: 
 *add in rainfall 
@@ -49,9 +48,12 @@ library(survival)
 library(PerformanceAnalytics)
 ```
 # Get data and plot it
+
+
+
 ```{r}
 url <- ("https://data.wa.gov/resource/rc6b-fvgb.json")
-parameter <- 'Copper - Water - Total'
+parameter <- 'Nitrite-Nitrate - Water - Dissolved'
 #construct the SQL call 
 #apiCall <- paste0(url,"?$where=Result_Data_Qualifier<>'REJ' AND parameter= ","'",parameter,"'")
 apiCall <- paste0(url,"?$where=parameter= ","'",parameter,"'")
@@ -95,20 +97,20 @@ s8data$Location <- substr(s8data$Location, 1, 12)
 #Plot data to view
 
 # Plot by study 
+plot.title <- paste0(s8data$parameter, ' (',s8data$new_result_units,')')
+
 plot <- ggplot(s8data, aes(study_id,new_result_value, fill = study_id)) + 
-  geom_boxplot()+theme(legend.position = "none")+scale_y_log10()+ggtitle(parameter)
+  geom_boxplot()+theme(legend.position = "none")+scale_y_log10()+ggtitle(plot.title)
  
    
 plot
 ```
 #Explore the data more 
-
-
 ```{r}
 
 # Plot by type 
 plot <- ggplot(s8data, aes(type,new_result_value, fill = study_id)) + 
-  geom_boxplot()+theme(legend.position = "none")+scale_y_log10()+ggtitle(parameter)
+  geom_boxplot()+theme(legend.position = "none")+scale_y_log10()+ggtitle(plot.title)
  
    
 plot
@@ -132,24 +134,50 @@ chart.Correlation(cor.data, histogram=FALSE, method = 'pearson')
 cor.matrix <- rcorr(as.matrix(cor.data),s8data$nondetect_flag)
 ```
 
-Imperviousness is the highest correleated, followed by elevation, then age and ndvi mean. 
+It looks like outliers are messing things up. 
 
-Let's choose 0.30 as the cutoff for correlation. This gives the following as variables to use: 
-*Landuse 
-  *Percent COM
-  *Percent SFR
-*Indicies
-  *pm25
-  *ndbi
-  *roads
-  *Impee
-  *elev
-  *imperviousness
-  *ndbi
-  *roads
-  *precip
+```{r}
+#plot everything as one boxplot to view outliers 
+
+boxplot(s8data$new_result_value)$out
+
+
+```
+
+```{r}
+#normally it is a good idea to keep outliers, but that one is so much larger, this is probably skewing things. 
+
+s8data<-
+  s8data [order(-s8data$new_result_value),] 
+s8data <-  s8data[-1,]
+
+#replot 
+boxplot(s8data$new_result_value)$out
+```
+Better! Try correlation again 
+This time log transform the data 
+
+```{r echo=TRUE}
+cor.data <- (cbind(log(s8data$new_result_value), s8data[, 18:22])) #land uses
+chart.Correlation(cor.data, histogram=FALSE, method = 'pearson')
+cor.matrix <- rcorr(as.matrix(cor.data),s8data$nondetect_flag)
+r<- (cor.matrix$r)[,1]
+P<- (cor.matrix$P)[,1]
+table <- (cbind(r,P))
+kable(table)
+```
+
 ```{r}
 
+cor.data <- cbind(log(s8data$new_result_value), s8data[, 10:17], s8data$age, s8data$elev) #indicies from earth engine
+chart.Correlation(cor.data, histogram=FALSE, method = 'pearson')
+cor.matrix <- rcorr(as.matrix(cor.data),s8data$nondetect_flag)
+
+
+```
+
+
+```{r}
 r<- (cor.matrix$r)[,1]
 P<- (cor.matrix$P)[,1]
 table <- (cbind(r,P))
@@ -163,7 +191,7 @@ library(leaps)
 
 
 leaps<-regsubsets(new_result_value ~ 
-                    COM + SFR + pm25 + ndbi + roads +Impee + elev + Impee + precip, data=s8data,method = "forward")
+                    MFR + IND + ghm + pm25 + ndbi +Impee + elev + roofs + elev, data=s8data,method = "forward")
 # view results 
 
 # plot a table of models showing variables in each model.
@@ -172,7 +200,7 @@ leaps<-regsubsets(new_result_value ~
 plot(leaps,scale="adjr2")
 plot(leaps,scale="bic")
 ```
-We will pass pm25, roads, Impee, elev to our mixed model
+We will pass MFR, IND, ghm, ndbi, Impee, elev,  to our mixed model
 
 #Let's see if there is a distribution we can use
 
@@ -183,7 +211,7 @@ library(qualityTools)
 x <- s8data$new_result_value
 qqPlot(x, "log-normal")
 qqPlot(x, "weibull")
-qqPlot(x, "gamma")
+#qqPlot(x, "gamma")
 qqPlot(x, "normal")
 qqPlot(x, 'exponential')
 qqPlot(log(x+1), "weibull")#this is the Gumbell distribution
@@ -195,18 +223,11 @@ Data are not normally distributed, mixed effects modeling cannot have normal dis
 assume a weibell or gamma distribution for mixed effects. These are both forms of the exponetional function
 
 #Generalized Mixed Model 
-PQL <- glmmPQL(Aggression.t ~ Relation + Season, ~1 | Observer/Test.ID, family = gaussian,
+PQL <- glmmPQL(Aggression.t ~ Relation + Season, ~1 | Observer/Test.ID, family = gaussian(link = "log"),
     data = recog, verbose = FALSE)
     
 ```{r}
-PQL <- glmmPQL(new_result_value ~ Impee + elev + pm25 + roads , data=s8data, random = ~1|Location,family = gaussian(link = 'log'))
-
-
-
-summary(PQL)
-```
-```{r}
-PQL <- glmmPQL(new_result_value ~ Impee + elev + roads , data=s8data, random = ~1|Location,family = gaussian(link = 'log'))
+PQL <- glmmPQL(new_result_value ~ IND+MFR+elev+ndbi+Impee+ghm, data=s8data, random = ~1|Location,family = gaussian(link = 'log'))
 
 
 
@@ -216,10 +237,12 @@ summary(PQL)
 
 ```{r}
 
-lm.compare <- lm(log(new_result_value) ~ Impee+roads+elev, data = s8data)
-
+#don't need to remove anything. All three are significant. 
+PQL2 <-PQL
+lm.compare <- lm(log(new_result_value) ~ IND+MFR+elev+ndbi+Impee+ghm, data = s8data)
+summary(PQL2)
 summary(lm.compare)
-#plot(PQL2, (new_result_value) ~ fitted(.), abline = c(0,1))
+#plot(PQL2, log(new_result_value) ~ fitted(.), abline = c(0,1))
 #anova(lm.compare)
 ```
 
@@ -227,25 +250,36 @@ summary(lm.compare)
 
 ```{r}
 #compare with a linear regression model 
-glme.equation <- tibble(x = s8data$Impee,y = exp(1.211128+5.744967 *s8data$Impee -1.753064 *s8data$elev -3.758569 *s8data$roads))
-lm.equation <- tibble(x = s8data$Impee,y = exp(0.5646     +7.3835     *s8data$Impee -2.0614 
-                                               *s8data$elev -4.9968 *s8data$roads))
+glme.equation <- tibble(x = s8data$IND,y = exp(7.292731-4.586686*s8data$IND+4.489650*s8data$MFR-3.428984*s8data$elev+12.015161*s8data$ndbi-10.653570*s8data$Impee-3.751844*s8data$ghm))
+lm.equation <- tibble(x = s8data$IND,y = exp(5.0531              -1.0183              *s8data$IND + 2.3365 *s8data$MFR - 1.0937   
+                                             *s8data$elev + 10.0080     * s8data$ndbi -8.7071 *s8data$Impee -1.2517 *s8data$ghm))
+
+p = ggplot() + 
+  geom_line(data = glme.equation, aes(x = x, y = y, color = "glme") ) +
+  geom_line(data = lm.equation, aes(x = x, y = y, color = "lm") ) +
+  geom_point(data = s8data, aes (x = s8data$IND, y = s8data$new_result_value))
+  
+p+scale_y_log10()+ggtitle(plot.title)
+
+```
+Do the same, but plot along Impee dimension. 
+```{r}
+#compare with a linear regression model 
+glme.equation <- tibble(x = s8data$Impee,y = exp(7.292731-4.586686*s8data$IND+4.489650*s8data$MFR-3.428984*s8data$elev+12.015161*s8data$ndbi-10.653570*s8data$Impee-3.751844*s8data$ghm))
+lm.equation <- tibble(x = s8data$Impee,y = exp(5.0531              -1.0183              *s8data$IND + 2.3365 *s8data$MFR - 1.0937   
+                                             *s8data$elev + 10.0080     * s8data$ndbi -8.7071 *s8data$Impee -1.2517 *s8data$ghm))
 
 p = ggplot() + 
   geom_line(data = glme.equation, aes(x = x, y = y, color = "glme") ) +
   geom_line(data = lm.equation, aes(x = x, y = y, color = "lm") ) +
   geom_point(data = s8data, aes (x = s8data$Impee, y = s8data$new_result_value))
   
-p+scale_y_log10()+ggtitle(parameter)
+p+scale_y_log10()+ggtitle(plot.title)
+
 
 ```
-
-
 
 
     
 #Dealing with Censored Data
 Since the data set has mixed detection limits, we will use the kaplan-meier estimator to evaluate median values
-
-
-
