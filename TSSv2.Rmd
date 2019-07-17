@@ -1,6 +1,7 @@
 ---
 title: "Spatial Regression of Stormwater Pollutants"
 author: "Christian Nilsen"
+Date: 7-17-2019
 output:
   html_document:
     s8data_print: paged
